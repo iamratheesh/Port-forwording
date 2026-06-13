@@ -101,6 +101,7 @@ export default async function handler(req, res) {
       return res.status(500).json({
         error: "Failed to fetch webhooks",
         details: error.message,
+        message: "Make sure MONGODB_URI is set in Vercel environment variables"
       });
     }
   }

@@ -28,8 +28,12 @@ export default async function handler(req, res) {
   }
 
   try {
+    console.log(`Processing webhook request for ID: ${webhookId}`);
+    console.log(`Request method: ${req.method}`);
+
     // Get webhook configuration
     const webhook = await getWebhookById(webhookId);
+    console.log(`Webhook found:`, !!webhook);
 
     if (!webhook) {
       return res.status(404).json({
@@ -126,6 +130,7 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error("Error forwarding webhook:", error.message);
+    console.error("Full error:", error);
 
     // Log the failed attempt
     try {
@@ -143,7 +148,8 @@ export default async function handler(req, res) {
       console.error("Failed to log webhook error:", logError);
     }
 
-    return res.status(502).json({
+    const statusCode = error.message?.includes("MongoDB") ? 503 : 502;
+    return res.status(statusCode).json({
       error: "Failed to forward webhook",
       details: error.message,
       webhookId,
