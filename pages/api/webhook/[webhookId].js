@@ -30,9 +30,20 @@ export default async function handler(req, res) {
   try {
     console.log(`Processing webhook request for ID: ${webhookId}`);
     console.log(`Request method: ${req.method}`);
+    console.log(`MONGODB_URI defined: ${!!process.env.MONGODB_URI}`);
 
     // Get webhook configuration
-    const webhook = await getWebhookById(webhookId);
+    let webhook;
+    try {
+      webhook = await getWebhookById(webhookId);
+    } catch (dbError) {
+      console.error("Database error:", dbError);
+      return res.status(503).json({
+        error: "Database connection failed",
+        details: dbError.message,
+        message: "Make sure MONGODB_URI is set in Vercel environment variables",
+      });
+    }
     console.log(`Webhook found:`, !!webhook);
 
     if (!webhook) {
