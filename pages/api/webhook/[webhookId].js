@@ -21,14 +21,14 @@ async function getRawBody(req) {
 }
 
 export default async function handler(req, res) {
-  const { webhookId } = req.query;
-
-  if (!webhookId) {
-    return res.status(400).json({ error: "Webhook ID is required" });
-  }
-
   try {
-    console.log(`Processing webhook request for ID: ${webhookId}`);
+    const { webhookId } = req.query;
+
+    if (!webhookId) {
+      return res.status(400).json({ error: "Webhook ID is required" });
+    }
+
+    console.log(`[${new Date().toISOString()}] Processing webhook request for ID: ${webhookId}`);
     console.log(`Request method: ${req.method}`);
     console.log(`MONGODB_URI defined: ${!!process.env.MONGODB_URI}`);
 
@@ -37,7 +37,8 @@ export default async function handler(req, res) {
     try {
       webhook = await getWebhookById(webhookId);
     } catch (dbError) {
-      console.error("Database error:", dbError);
+      console.error("Database error:", dbError.message);
+      console.error("Database error stack:", dbError.stack);
       return res.status(503).json({
         error: "Database connection failed",
         details: dbError.message,
@@ -141,32 +142,32 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error("Error forwarding webhook:", error.message);
-    console.error("Full error:", error);
+    console.error("Error stack:", error.stack);
 
-    // Log the failed attempt
+    // Log the failed attempt (don't fail if logging fails)
     try {
-      await logWebhookEvent(webhookId, {
-        method: req.method,
-        headers: req.headers,
-        body: req.body,
-        query: req.query,
-        statusCode: 500,
-        forwardedTo:
-          webhook?.targetUrl || `http://localhost:${webhook?.localhostPort}`,
-        error: error.message,
-      });
+      const { webhookId } = req.query;
+      if (webhookId) {
+        await logWebhookEvent(webhookId, {
+          method: req.method,
+          headers: req.headers,
+          body: req.body,
+          query: req.query,
+          statusCode: 500,
+          forwardedTo: "unknown",
+          error: error.message,
+        });
+      }
     } catch (logError) {
-      console.error("Failed to log webhook error:", logError);
+      console.error("Failed to log webhook error:", logError.message);
     }
 
-    const statusCode = error.message?.includes("MongoDB") ? 503 : 502;
+    // Always return a response, never let the function crash
+    const statusCode = error.message?.includes("MongoDB") || error.message?.includes("Database") ? 503 : 502;
     return res.status(statusCode).json({
       error: "Failed to forward webhook",
       details: error.message,
-      webhookId,
-      hint: webhook?.targetUrl
-        ? `Make sure the target URL ${webhook.targetUrl} is reachable`
-        : `Make sure your localhost:${webhook?.localhostPort} is running and accepting POST requests`,
+      message: "Check Vercel logs for more details",
     });
   }
 }
