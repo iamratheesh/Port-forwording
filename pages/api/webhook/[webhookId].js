@@ -21,57 +21,44 @@ async function getRawBody(req) {
 }
 
 export default async function handler(req, res) {
+  const { webhookId } = req.query;
+
+  if (!webhookId) {
+    return res.status(400).json({ error: "Webhook ID is required" });
+  }
+
   try {
-    const { webhookId } = req.query;
-
-    if (!webhookId) {
-      return res.status(400).json({ error: "Webhook ID is required" });
-    }
-
-    console.log(`[${new Date().toISOString()}] Processing webhook request for ID: ${webhookId}`);
-    console.log(`Request method: ${req.method}`);
-    console.log(`MONGODB_URI defined: ${!!process.env.MONGODB_URI}`);
+    console.log(`[${new Date().toISOString()}] Processing webhook for ${webhookId}`);
+    console.log(`MONGODB_URI: ${!!process.env.MONGODB_URI}`);
 
     // Get webhook configuration
     let webhook;
     try {
       webhook = await getWebhookById(webhookId);
     } catch (dbError) {
-      console.error("Database error:", dbError.message);
-      console.error("Database error stack:", dbError.stack);
+      console.error("DB Error:", dbError.message);
       return res.status(503).json({
         error: "Database connection failed",
         details: dbError.message,
-        message: "Make sure MONGODB_URI is set in Vercel environment variables",
       });
     }
-    console.log(`Webhook found:`, !!webhook);
 
     if (!webhook) {
-      return res.status(404).json({
-        error: "Webhook not found",
-        webhookId,
-      });
+      return res.status(404).json({ error: "Webhook not found" });
     }
 
     if (!webhook.isActive) {
-      return res.status(403).json({
-        error: "Webhook is not active",
-      });
+      return res.status(403).json({ error: "Webhook is not active" });
     }
 
-    // Only handle POST requests for now
     if (req.method !== "POST") {
-      return res.status(405).json({
-        error: "Only POST requests are supported",
-      });
+      return res.status(405).json({ error: "Only POST requests are supported" });
     }
 
-    // Determine forward URL: prefer explicit targetUrl, otherwise use localhostPort
     const suffix = req.url.replace(`/api/webhook/${webhookId}`, "");
     let forwardUrl;
+
     if (webhook.targetUrl) {
-      // Append any suffix to the provided targetUrl
       if (suffix && webhook.targetUrl.endsWith("/") && suffix.startsWith("/")) {
         forwardUrl = webhook.targetUrl.slice(0, -1) + suffix;
       } else {
@@ -81,7 +68,6 @@ export default async function handler(req, res) {
       forwardUrl = `http://localhost:${webhook.localhostPort}${suffix}`;
     }
 
-    // Read raw incoming body so we preserve payload formatting
     const rawBody = await getRawBody(req);
     const contentType = req.headers["content-type"] || "";
 
@@ -99,24 +85,21 @@ export default async function handler(req, res) {
       }
     }
 
-    // Prepare headers (exclude host and connection headers)
     const headersToForward = { ...req.headers };
     delete headersToForward.host;
     delete headersToForward.connection;
     delete headersToForward["content-length"];
     delete headersToForward["transfer-encoding"];
 
-    // Forward the request to localhost/target preserving body format
     const forwardResponse = await axios({
       method: req.method,
       url: forwardUrl,
       headers: headersToForward,
       data: rawBody,
       responseType: "arraybuffer",
-      validateStatus: () => true, // Don't throw on any status code
+      validateStatus: () => true,
     });
 
-    // Log the webhook event
     await logWebhookEvent(webhookId, {
       method: req.method,
       headers: req.headers,
@@ -126,48 +109,35 @@ export default async function handler(req, res) {
       forwardedTo: forwardUrl,
     });
 
-    // Update webhook trigger count
     await updateWebhookTrigger(webhookId);
 
-    // Return the forwarded response to the original caller
     return res.status(forwardResponse.status).json({
       success: true,
       forwarded: true,
       originalResponse: forwardResponse.data,
       forwardedTo: forwardUrl,
-      webhook: {
-        webhookId,
-        localhostPort: webhook.localhostPort,
-      },
     });
   } catch (error) {
-    console.error("Error forwarding webhook:", error.message);
-    console.error("Error stack:", error.stack);
+    console.error("Handler error:", error.message);
+    console.error("Stack:", error.stack);
 
-    // Log the failed attempt (don't fail if logging fails)
     try {
-      const { webhookId } = req.query;
-      if (webhookId) {
-        await logWebhookEvent(webhookId, {
-          method: req.method,
-          headers: req.headers,
-          body: req.body,
-          query: req.query,
-          statusCode: 500,
-          forwardedTo: "unknown",
-          error: error.message,
-        });
-      }
+      await logWebhookEvent(webhookId, {
+        method: req.method,
+        headers: req.headers,
+        body: null,
+        query: req.query,
+        statusCode: 500,
+        forwardedTo: "unknown",
+        error: error.message,
+      });
     } catch (logError) {
-      console.error("Failed to log webhook error:", logError.message);
+      console.error("Log failed:", logError.message);
     }
 
-    // Always return a response, never let the function crash
-    const statusCode = error.message?.includes("MongoDB") || error.message?.includes("Database") ? 503 : 502;
-    return res.status(statusCode).json({
-      error: "Failed to forward webhook",
+    return res.status(500).json({
+      error: "Webhook processing failed",
       details: error.message,
-      message: "Check Vercel logs for more details",
     });
   }
 }
