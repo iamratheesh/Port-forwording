@@ -5,6 +5,21 @@ import {
   updateWebhookTrigger,
 } from "../../../lib/webhookService";
 
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
+async function getRawBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 export default async function handler(req, res) {
   const { webhookId } = req.query;
 
@@ -50,6 +65,24 @@ export default async function handler(req, res) {
       forwardUrl = `http://localhost:${webhook.localhostPort}${suffix}`;
     }
 
+    // Read raw incoming body so we preserve payload formatting
+    const rawBody = await getRawBody(req);
+    const contentType = req.headers["content-type"] || "";
+
+    let loggedBody = rawBody;
+    if (Buffer.isBuffer(rawBody)) {
+      const bodyText = rawBody.toString("utf8");
+      if (contentType.includes("application/json")) {
+        try {
+          loggedBody = JSON.parse(bodyText);
+        } catch {
+          loggedBody = bodyText;
+        }
+      } else {
+        loggedBody = bodyText;
+      }
+    }
+
     // Prepare headers (exclude host and connection headers)
     const headersToForward = { ...req.headers };
     delete headersToForward.host;
@@ -62,7 +95,8 @@ export default async function handler(req, res) {
       method: req.method,
       url: forwardUrl,
       headers: headersToForward,
-      data: req.body,
+      data: rawBody,
+      responseType: "arraybuffer",
       validateStatus: () => true, // Don't throw on any status code
     });
 
@@ -70,7 +104,7 @@ export default async function handler(req, res) {
     await logWebhookEvent(webhookId, {
       method: req.method,
       headers: req.headers,
-      body: req.body,
+      body: loggedBody,
       query: req.query,
       statusCode: forwardResponse.status,
       forwardedTo: forwardUrl,
